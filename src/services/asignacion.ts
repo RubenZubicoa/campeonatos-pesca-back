@@ -83,15 +83,32 @@ export function asignarManga(
   const conteo: [number, number] = [0, 0]
   const cargaSector = new Map<string, number>()
   const asignaciones: Asignacion[] = []
+  const tramosAlcanzables = new Set(
+    [...candidatos.values()].flatMap((opciones) => opciones.map((opcion) => opcion.tramoId)),
+  )
+  const objetivo = Math.min(participantes.length, tramosAlcanzables.size)
+  let mejor: Asignacion[] | null = null
   let pasos = 0
 
+  function distintos(lista: Asignacion[]) {
+    return new Set(lista.map((asignacion) => asignacion.tramoId)).size
+  }
+
   function buscar(indice: number): boolean {
-    if (indice === orden.length) return true
+    if (indice === orden.length) {
+      if (!mejor || distintos(asignaciones) > distintos(mejor)) {
+        mejor = asignaciones.map((asignacion) => ({ ...asignacion }))
+      }
+      return distintos(asignaciones) >= objetivo
+    }
     if (++pasos > 250000) return false
     const participante = orden[indice]
-    const opciones = [...(candidatos.get(participante.id) ?? [])].sort(
-      (a, b) => (cargaSector.get(a.sectorId) ?? 0) - (cargaSector.get(b.sectorId) ?? 0),
-    )
+    const opciones = [...(candidatos.get(participante.id) ?? [])].sort((a, b) => {
+      const yaUsado = (tramoId: string) => (ocupados[0].has(tramoId) || ocupados[1].has(tramoId) ? 1 : 0)
+      const novedad = yaUsado(a.tramoId) - yaUsado(b.tramoId)
+      if (novedad !== 0) return novedad
+      return (cargaSector.get(a.sectorId) ?? 0) - (cargaSector.get(b.sectorId) ?? 0)
+    })
     const turnos = ([1, 2] as const).filter((turno) => conteo[turno - 1] < cupo[turno - 1])
     for (const turno of turnos) {
       for (const opcion of opciones) {
@@ -115,7 +132,8 @@ export function asignarManga(
     return false
   }
 
-  if (!buscar(0)) {
+  buscar(0)
+  if (!mejor) {
     return {
       ok: false,
       error:
@@ -123,7 +141,7 @@ export function asignarManga(
     }
   }
 
-  return { ok: true, asignaciones }
+  return { ok: true, asignaciones: mejor }
 }
 
 export function asignarMangaPermitiendoRepeticion(
@@ -166,10 +184,11 @@ export function asignarMangaPermitiendoRepeticion(
     const anterior = sectorPrevio.get(participante.id)
     const elegido = [...disponibles].sort((a, b) => {
       const peso = (tramo: TramoRef) => {
-        const libre = (ocupados[turno - 1].get(tramo.id) ?? 0) === 0 ? 0 : 4
+        const enEsteTurno = ocupados[turno - 1].get(tramo.id) ?? 0
+        const enElOtroTurno = ocupados[turno === 1 ? 1 : 0].get(tramo.id) ?? 0
         const repetido = prohibidos.has(tramo.id) ? 2 : 0
         const mismoSector = anterior && tramo.sectorId === anterior ? 1 : 0
-        return libre + repetido + mismoSector
+        return enEsteTurno * 100 + enElOtroTurno * 10 + repetido + mismoSector
       }
       return peso(a) - peso(b)
     })[0]
