@@ -43,11 +43,14 @@ campeonatosRouter.post(
     const nombre = textoObligatorio(datos.nombre, 'Indica el nombre del campeonato.')
     const fecha = textoObligatorio(datos.fecha, 'Indica la fecha del campeonato.')
     const lugar = textoObligatorio(datos.lugar, 'Indica el lugar del campeonato.')
+    const medidaMinima = numeroFinito(datos.medidaMinima, 'Indica la medida mínima.')
+    const puntosT = numeroFinito(datos.puntosT, 'Indica los puntos T.')
+    const duos = booleano(datos.duos, 'Indica si el campeonato es de dúos.')
     const id =
       datos.id === undefined
         ? await idLibre(idDesdeNombre(nombre))
         : identificadorCampeonato(textoObligatorio(datos.id, 'El identificador no es válido.'))
-    const campeonato = await Campeonato.create({ id, nombre, fecha, lugar })
+    const campeonato = await Campeonato.create({ id, nombre, fecha, lugar, medidaMinima, puntosT, duos })
     res.status(201).json(campeonato)
   }),
 )
@@ -73,6 +76,15 @@ campeonatosRouter.patch(
     }
     if (datos.lugar !== undefined) {
       campeonato.lugar = textoObligatorio(datos.lugar, 'Indica el lugar del campeonato.')
+    }
+    if (datos.medidaMinima !== undefined) {
+      campeonato.medidaMinima = numeroFinito(datos.medidaMinima, 'Indica la medida mínima.')
+    }
+    if (datos.puntosT !== undefined) {
+      campeonato.puntosT = numeroFinito(datos.puntosT, 'Indica los puntos T.')
+    }
+    if (datos.duos !== undefined) {
+      campeonato.duos = booleano(datos.duos, 'Indica si el campeonato es de dúos.')
     }
     if (!campeonato.isModified()) throw new HttpError(400, 'No hay cambios.')
     await campeonato.save()
