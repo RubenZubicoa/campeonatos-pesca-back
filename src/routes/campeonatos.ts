@@ -1,5 +1,6 @@
 import { Router, type Request, type Response } from 'express'
 import { Captura } from '../models/Captura.js'
+import { Controls } from '../models/Controls.js'
 import { Manga } from '../models/Manga.js'
 import { Participante } from '../models/Participante.js'
 import { Sector } from '../models/Sector.js'
@@ -89,6 +90,7 @@ campeonatosRouter.delete(
       Tramo.deleteMany({ campeonatoId }),
       Manga.deleteMany({ campeonatoId }),
       Captura.deleteMany({ campeonatoId }),
+      Controls.deleteMany({ campeonatoId }),
     ])
     await campeonato.deleteOne()
     res.status(204).send()
@@ -101,6 +103,7 @@ recursos.use('/participantes', participantesRouter())
 recursos.use(escenarioRouter())
 recursos.use('/mangas', mangasRouter())
 recursos.use('/capturas', capturasRouter())
+recursos.use('/controls', controlsRouter())
 recursos.get('/clasificacion', asyncHandler(clasificacion))
 campeonatosRouter.use('/:campeonatoId', recursos)
 
@@ -422,6 +425,105 @@ function capturasRouter() {
   )
 
   return router
+}
+
+function controlsRouter() {
+  const router = Router({ mergeParams: true })
+
+  router.get(
+    '/',
+    asyncHandler(async (req, res) => {
+      const filtro: Record<string, string> = { campeonatoId: parametro(req.params.campeonatoId) }
+      if (typeof req.query.participanteId === 'string' && req.query.participanteId) {
+        filtro.participanteId = req.query.participanteId
+      }
+      if (typeof req.query.mangaId === 'string' && req.query.mangaId) {
+        filtro.mangaId = req.query.mangaId
+      }
+      const controls = await Controls.find(filtro).sort({ createdAt: 1, id: 1 })
+      res.json(controls)
+    }),
+  )
+
+  router.get(
+    '/:controlId',
+    asyncHandler(async (req, res) => {
+      const control = await buscarControl(parametro(req.params.campeonatoId), parametro(req.params.controlId))
+      res.json(control)
+    }),
+  )
+
+  router.post(
+    '/',
+    asyncHandler(async (req, res) => {
+      const campeonatoId = parametro(req.params.campeonatoId)
+      const datos = cuerpo(req.body)
+      const participanteId = textoObligatorio(datos.participanteId, 'Indica el participante.')
+      const mangaId = textoObligatorio(datos.mangaId, 'Indica la manga.')
+      const control = textoObligatorio(datos.control, 'Indica el control.')
+      const tramo = textoObligatorio(datos.tramo, 'Indica el tramo.')
+      await exigirParticipanteYManga(campeonatoId, participanteId, mangaId)
+      const creado = await Controls.create({
+        id: crearId(),
+        campeonatoId,
+        participanteId,
+        mangaId,
+        control,
+        tramo,
+      })
+      res.status(201).json(creado)
+    }),
+  )
+
+  router.patch(
+    '/:controlId',
+    asyncHandler(async (req, res) => {
+      const campeonatoId = parametro(req.params.campeonatoId)
+      const documento = await buscarControl(campeonatoId, parametro(req.params.controlId))
+      const datos = cuerpo(req.body)
+      if (datos.control !== undefined) {
+        documento.control = textoObligatorio(datos.control, 'Indica el control.')
+      }
+      if (datos.tramo !== undefined) {
+        documento.tramo = textoObligatorio(datos.tramo, 'Indica el tramo.')
+      }
+      if (datos.participanteId !== undefined) {
+        const participanteId = textoObligatorio(datos.participanteId, 'Indica el participante.')
+        const participante = await Participante.exists({ id: participanteId, campeonatoId })
+        if (!participante) throw new HttpError(400, 'Ese participante no está inscrito en este campeonato.')
+        documento.participanteId = participanteId
+      }
+      if (datos.mangaId !== undefined) {
+        const mangaId = textoObligatorio(datos.mangaId, 'Indica la manga.')
+        const manga = await Manga.exists({ id: mangaId, campeonatoId })
+        if (!manga) throw new HttpError(400, 'Esa manga no pertenece a este campeonato.')
+        documento.mangaId = mangaId
+      }
+      if (!documento.isModified()) throw new HttpError(400, 'No hay cambios.')
+      await documento.save()
+      res.json(documento)
+    }),
+  )
+
+  router.delete(
+    '/:controlId',
+    asyncHandler(async (req, res) => {
+      const borrado = await Controls.findOneAndDelete({
+        id: parametro(req.params.controlId),
+        campeonatoId: parametro(req.params.campeonatoId),
+      })
+      if (!borrado) throw new HttpError(404, 'Control no encontrado.')
+      res.status(204).send()
+    }),
+  )
+
+  return router
+}
+
+async function buscarControl(campeonatoId: string, controlId: string) {
+  const control = await Controls.findOne({ id: controlId, campeonatoId })
+  if (!control) throw new HttpError(404, 'Control no encontrado.')
+  return control
 }
 
 async function clasificacion(req: Request, res: Response) {
