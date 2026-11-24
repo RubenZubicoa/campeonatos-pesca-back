@@ -22,7 +22,7 @@ import {
   textoObligatorio,
 } from '../utils/validar.js'
 import { asignarManga, asignarMangaPermitiendoRepeticion, type Asignacion } from '../services/asignacion.js'
-import { asignarControles } from '../services/controles.js'
+import { asignarControles, horaDeControl } from '../services/controles.js'
 import { clasificacionFinal, clasificarManga } from '../services/clasificacion.js'
 import { Campeonato } from '../models/Campeonato.js'
 
@@ -340,11 +340,17 @@ function mangasRouter() {
       })
       if (!manga) throw new HttpError(404, 'Manga no encontrada.')
       const datos = cuerpo(req.body)
-      manga.visibleParaParticipantes = booleano(
-        datos.visibleParaParticipantes,
-        'Indica si la manga es visible para los participantes.',
-      )
+      const campeonatoId = parametro(req.params.campeonatoId)
+      if (datos.visibleParaParticipantes !== undefined) {
+        manga.visibleParaParticipantes = booleano(
+          datos.visibleParaParticipantes,
+          'Indica si la manga es visible para los participantes.',
+        )
+      }
+      const asignacionCambiada = datos.asignacion === undefined ? false : await aplicarAsignacion(campeonatoId, manga, datos.asignacion)
+      if (!manga.isModified()) throw new HttpError(400, 'No hay cambios.')
       await manga.save()
+      if (asignacionCambiada) await Controls.deleteMany({ campeonatoId, mangaId: manga.id })
       res.json(manga)
     }),
   )
@@ -365,6 +371,35 @@ function mangasRouter() {
   )
 
   return router
+}
+
+async function aplicarAsignacion(
+  campeonatoId: string,
+  manga: { asignaciones: { participanteId: string; tramoId: string; sectorId: string; turno: number }[]; markModified: (ruta: string) => void },
+  valor: unknown,
+) {
+  const datos = cuerpo(valor)
+  const participanteId = textoObligatorio(datos.participanteId, 'Indica el participante.')
+  const tramoId = textoObligatorio(datos.tramoId, 'Indica el tramo.')
+  if (datos.turno !== 1 && datos.turno !== 2) {
+    throw new HttpError(400, 'Indica si pesca en la primera o en la segunda franja.')
+  }
+  const turno = datos.turno
+  const actual = manga.asignaciones.find((item) => item.participanteId === participanteId)
+  if (!actual) throw new HttpError(400, 'Ese participante no está en esta manga.')
+  const tramo = await Tramo.findOne({ id: tramoId, campeonatoId })
+  if (!tramo) throw new HttpError(400, 'Ese tramo no pertenece a este campeonato.')
+  if (!tramo.sectorId) throw new HttpError(400, 'Ese tramo no tiene sector.')
+  const ocupado = manga.asignaciones.some(
+    (item) => item.participanteId !== participanteId && item.turno === turno && item.tramoId === tramoId,
+  )
+  if (ocupado) throw new HttpError(400, 'Ese tramo ya se pesca en esa franja.')
+  if (actual.tramoId === tramoId && actual.turno === turno && actual.sectorId === tramo.sectorId) return false
+  actual.tramoId = tramoId
+  actual.sectorId = tramo.sectorId
+  actual.turno = turno
+  manga.markModified('asignaciones')
+  return true
 }
 
 function capturasRouter() {
@@ -457,18 +492,23 @@ function controlsRouter() {
       if (manga.asignaciones.length === 0) {
         throw new HttpError(400, 'Esta manga no tiene participantes asignados.')
       }
-      const propuestas = asignarControles(
-        manga.asignaciones.map((asignacion: { participanteId: string; tramoId: string; turno: number }) => ({
-          participanteId: asignacion.participanteId,
-          tramoId: asignacion.tramoId,
-          turno: asignacion.turno === 2 ? 2 : 1,
-        })),
-        tramos.map((tramo) => ({
-          id: tramo.id,
-          nombre: tramo.nombre,
-          sectorId: tramo.sectorId,
-        })),
-      )
+      let propuestas
+      try {
+        propuestas = asignarControles(
+          manga.asignaciones.map((asignacion: { participanteId: string; tramoId: string; turno: number }) => ({
+            participanteId: asignacion.participanteId,
+            tramoId: asignacion.tramoId,
+            turno: asignacion.turno === 2 ? 2 : 1,
+          })),
+          tramos.map((tramo) => ({
+            id: tramo.id,
+            nombre: tramo.nombre,
+            sectorId: tramo.sectorId,
+          })),
+        )
+      } catch (error) {
+        throw new HttpError(400, error instanceof Error ? error.message : 'No se han podido asignar los controles.')
+      }
       await Controls.deleteMany({ campeonatoId, mangaId })
       const creados = await Controls.create(
         propuestas.map((propuesta) => ({
@@ -515,6 +555,7 @@ function controlsRouter() {
       const control = textoObligatorio(datos.control, 'Indica el control.')
       const tramo = textoObligatorio(datos.tramo, 'Indica el tramo.')
       await exigirParticipanteYManga(campeonatoId, participanteId, mangaId)
+      await exigirControlPescado(campeonatoId, mangaId, participanteId, control)
       const creado = await Controls.create({
         id: crearId(),
         campeonatoId,
@@ -552,6 +593,7 @@ function controlsRouter() {
         documento.mangaId = mangaId
       }
       if (!documento.isModified()) throw new HttpError(400, 'No hay cambios.')
+      await exigirControlPescado(campeonatoId, documento.mangaId, documento.participanteId, documento.control)
       await documento.save()
       res.json(documento)
     }),
@@ -570,6 +612,23 @@ function controlsRouter() {
   )
 
   return router
+}
+
+async function exigirControlPescado(campeonatoId: string, mangaId: string, participanteId: string, control: string) {
+  const manga = await Manga.findOne({ id: mangaId, campeonatoId })
+  if (!manga) throw new HttpError(400, 'Esa manga no pertenece a este campeonato.')
+  const asignacion = manga.asignaciones.find(
+    (item: { participanteId: string; turno: number }) => item.participanteId === participanteId,
+  )
+  if (!asignacion) throw new HttpError(400, 'Ese participante no está en esta manga.')
+  const hora = horaDeControl(asignacion.turno === 2 ? 2 : 1)
+  const ids = manga.asignaciones
+    .filter((item: { turno: number }) => item.turno === hora)
+    .map((item: { tramoId: string }) => item.tramoId)
+  const tramos = await Tramo.find({ campeonatoId, id: { $in: ids } })
+  if (!tramos.some((tramo) => tramo.nombre === control)) {
+    throw new HttpError(400, 'Ese tramo no se pesca en la hora del control.')
+  }
 }
 
 async function buscarControl(campeonatoId: string, controlId: string) {

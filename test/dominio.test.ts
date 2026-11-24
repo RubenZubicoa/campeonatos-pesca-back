@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { dniValido, normalizarDni } from '../src/utils/dni.ts'
-import { asignarManga } from '../src/services/asignacion.ts'
+import { asignarManga, asignarMangaPermitiendoRepeticion } from '../src/services/asignacion.ts'
 import { clasificacionFinal, clasificarManga } from '../src/services/clasificacion.ts'
 import { asignarControles } from '../src/services/controles.ts'
 
@@ -52,6 +52,34 @@ describe('asignarManga', () => {
     }
   })
 
+  it('con cuatro participantes y cuatro tramos usa un tramo distinto para cada uno', () => {
+    const cuatro = [{ id: 'p1' }, { id: 'p2' }, { id: 'p3' }, { id: 'p4' }]
+    const resultado = asignarManga(cuatro, sectores, tramos, [])
+    assert.equal(resultado.ok, true)
+    if (!resultado.ok) return
+    assert.equal(new Set(resultado.asignaciones.map((asignacion) => asignacion.tramoId)).size, 4)
+    assert.deepEqual(
+      resultado.asignaciones.map((asignacion) => asignacion.turno).sort(),
+      [1, 1, 2, 2],
+    )
+  })
+
+  it('rellena todos los tramos cuando hay más participantes que tramos', () => {
+    const seis = Array.from({ length: 6 }, (_, indice) => ({ id: `p${indice}` }))
+    const resultado = asignarManga(seis, sectores, tramos, [])
+    assert.equal(resultado.ok, true)
+    if (!resultado.ok) return
+    assert.equal(new Set(resultado.asignaciones.map((asignacion) => asignacion.tramoId)).size, tramos.length)
+  })
+
+  it('el reparto flexible también ocupa tramos distintos antes de repetir', () => {
+    const cuatro = [{ id: 'p1' }, { id: 'p2' }, { id: 'p3' }, { id: 'p4' }]
+    const resultado = asignarMangaPermitiendoRepeticion(cuatro, sectores, tramos, [])
+    assert.equal(resultado.ok, true)
+    if (!resultado.ok) return
+    assert.equal(new Set(resultado.asignaciones.map((asignacion) => asignacion.tramoId)).size, 4)
+  })
+
   it('exige al menos dos sectores', () => {
     const resultado = asignarManga(
       participantes,
@@ -70,22 +98,72 @@ describe('asignarControles', () => {
     { id: 't7', nombre: '7', sectorId: 'a' },
   ]
 
-  it('quien pesca a primera hora controla su propio tramo', () => {
-    const [control] = asignarControles(
-      [{ participanteId: 'p1', tramoId: 't6', turno: 1 }],
+  it('quien pesca a primera controla un tramo que se pesca a segunda', () => {
+    const controles = asignarControles(
+      [
+        { participanteId: 'p1', tramoId: 't6', turno: 1 },
+        { participanteId: 'p2', tramoId: 't7', turno: 2 },
+      ],
       tramos,
     )
-    assert.equal(control?.tramo, '6')
-    assert.equal(control?.control, '6')
+    const primero = controles.find((control) => control.participanteId === 'p1')
+    assert.equal(primero?.tramo, '6')
+    assert.equal(primero?.control, '7')
   })
 
-  it('quien pesca a segunda hora controla el tramo siguiente', () => {
-    const [control] = asignarControles(
-      [{ participanteId: 'p2', tramoId: 't6', turno: 2 }],
+  it('quien pesca a segunda controla el tramo siguiente si se pesca a primera', () => {
+    const controles = asignarControles(
+      [
+        { participanteId: 'p1', tramoId: 't7', turno: 1 },
+        { participanteId: 'p2', tramoId: 't6', turno: 2 },
+      ],
       tramos,
     )
-    assert.equal(control?.tramo, '6')
-    assert.equal(control?.control, '7')
+    const segundo = controles.find((control) => control.participanteId === 'p2')
+    assert.equal(segundo?.tramo, '6')
+    assert.equal(segundo?.control, '7')
+  })
+
+  it('si su tramo se vuelve a pescar, quien pescó a primera lo controla', () => {
+    const controles = asignarControles(
+      [
+        { participanteId: 'p1', tramoId: 't6', turno: 1 },
+        { participanteId: 'p2', tramoId: 't6', turno: 2 },
+      ],
+      tramos,
+    )
+    const primero = controles.find((control) => control.participanteId === 'p1')
+    assert.equal(primero?.control, '6')
+  })
+
+  it('no asigna un tramo que no se pesca en la hora del control', () => {
+    const controles = asignarControles(
+      [
+        { participanteId: 'a', tramoId: 't5', turno: 1 },
+        { participanteId: 'b', tramoId: 't6', turno: 1 },
+        { participanteId: 'c', tramoId: 't7', turno: 2 },
+      ],
+      tramos,
+    )
+    const dePrimera = new Set(['5', '6'])
+    const deSegunda = new Set(['7'])
+    const porParticipante = new Map([
+      ['a', 1],
+      ['b', 1],
+      ['c', 2],
+    ] as const)
+    for (const control of controles) {
+      const turno = porParticipante.get(control.participanteId as 'a' | 'b' | 'c')
+      const validos = turno === 1 ? deSegunda : dePrimera
+      assert.equal(validos.has(control.control), true)
+    }
+  })
+
+  it('falla si una franja no tiene tramos pescados', () => {
+    assert.throws(
+      () => asignarControles([{ participanteId: 'p1', tramoId: 't6', turno: 1 }], tramos),
+      /cada franja/i,
+    )
   })
 })
 
