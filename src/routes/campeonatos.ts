@@ -22,6 +22,7 @@ import {
   textoObligatorio,
 } from '../utils/validar.js'
 import { asignarManga, asignarMangaPermitiendoRepeticion, type Asignacion } from '../services/asignacion.js'
+import { asignarControles } from '../services/controles.js'
 import { clasificacionFinal, clasificarManga } from '../services/clasificacion.js'
 import { Campeonato } from '../models/Campeonato.js'
 
@@ -345,6 +346,7 @@ function mangasRouter() {
       if (!ultima || ultima.id !== mangaId) {
         throw new HttpError(409, 'Solo se puede quitar la última manga.')
       }
+      await Controls.deleteMany({ campeonatoId, mangaId })
       await ultima.deleteOne()
       res.status(204).send()
     }),
@@ -429,6 +431,44 @@ function capturasRouter() {
 
 function controlsRouter() {
   const router = Router({ mergeParams: true })
+
+  router.post(
+    '/generar',
+    asyncHandler(async (req, res) => {
+      const campeonatoId = parametro(req.params.campeonatoId)
+      const mangaId = textoObligatorio(cuerpo(req.body).mangaId, 'Indica la manga.')
+      const [manga, tramos] = await Promise.all([
+        Manga.findOne({ id: mangaId, campeonatoId }),
+        Tramo.find({ campeonatoId }),
+      ])
+      if (!manga) throw new HttpError(404, 'Manga no encontrada.')
+      if (manga.asignaciones.length === 0) {
+        throw new HttpError(400, 'Esta manga no tiene participantes asignados.')
+      }
+      const propuestas = asignarControles(
+        manga.asignaciones.map((asignacion: { participanteId: string; tramoId: string; turno: number }) => ({
+          participanteId: asignacion.participanteId,
+          tramoId: asignacion.tramoId,
+          turno: asignacion.turno === 2 ? 2 : 1,
+        })),
+        tramos.map((tramo) => ({
+          id: tramo.id,
+          nombre: tramo.nombre,
+          sectorId: tramo.sectorId,
+        })),
+      )
+      await Controls.deleteMany({ campeonatoId, mangaId })
+      const creados = await Controls.create(
+        propuestas.map((propuesta) => ({
+          id: crearId(),
+          campeonatoId,
+          mangaId,
+          ...propuesta,
+        })),
+      )
+      res.status(201).json(creados)
+    }),
+  )
 
   router.get(
     '/',

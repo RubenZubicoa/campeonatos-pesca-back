@@ -3,6 +3,7 @@ import { describe, it } from 'node:test'
 import { dniValido, normalizarDni } from '../src/utils/dni.ts'
 import { asignarManga } from '../src/services/asignacion.ts'
 import { clasificacionFinal, clasificarManga } from '../src/services/clasificacion.ts'
+import { asignarControles } from '../src/services/controles.ts'
 
 describe('dni', () => {
   it('acepta un DNI con la letra correcta', () => {
@@ -59,6 +60,32 @@ describe('asignarManga', () => {
       [],
     )
     assert.equal(resultado.ok, false)
+  })
+})
+
+describe('asignarControles', () => {
+  const tramos = [
+    { id: 't5', nombre: '5', sectorId: 'a' },
+    { id: 't6', nombre: '6', sectorId: 'a' },
+    { id: 't7', nombre: '7', sectorId: 'a' },
+  ]
+
+  it('quien pesca a primera hora controla su propio tramo', () => {
+    const [control] = asignarControles(
+      [{ participanteId: 'p1', tramoId: 't6', turno: 1 }],
+      tramos,
+    )
+    assert.equal(control?.tramo, '6')
+    assert.equal(control?.control, '6')
+  })
+
+  it('quien pesca a segunda hora controla el tramo siguiente', () => {
+    const [control] = asignarControles(
+      [{ participanteId: 'p2', tramoId: 't6', turno: 2 }],
+      tramos,
+    )
+    assert.equal(control?.tramo, '6')
+    assert.equal(control?.control, '7')
   })
 })
 
